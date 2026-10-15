@@ -1,0 +1,19 @@
+{
+  "name": "po-management",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@cap-js/postgres": "^3.1.1",
+    "@sap/cds": "^10"
+  },
+  "scripts": {
+    "start": "cds-serve"
+  },
+  "cds": {
+    "requires": {
+      "db": {
+        "kind": "postgres"
+      }
+    }
+  }
+}
