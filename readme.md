@@ -748,3 +748,63 @@ curl -i -X POST \
 
 -------------------------------------------------------------------------------------------------
 
+## purchase order different scenarios
+
+  ## valid supplier and company  status active && valid company and purchase org  status active
+
+curl -i -X POST \
+  'http://localhost:4004/odata/v4/purchase/PurchaseOrders' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "poNumber": "PO20261003",
+    "supplier_ID": "8ed8c241-a387-4fcc-bc2f-f6935ccee03a",
+    "companyCode_ID": "06ee4070-b07c-48a9-8087-7c18b70d239a",
+    "purchasingOrganization_ID": "eecb1f99-9fe9-4ddc-a23a-726ecfc508d9",
+    "purchasingGroup_ID": "7cac04f1-e350-473a-9fc7-dbfd4251d894",
+    "documentDate": "2026-10-16",
+    "currency": "INR",
+    "status": "Draft"
+  }'
+
+  ## invalid supplier and company && valid company and purchase org status active
+
+curl -i -X POST \
+  'http://localhost:4004/odata/v4/purchase/PurchaseOrders' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "poNumber": "PO20261003",
+    "supplier_ID": "ac6b00a4-5618-4888-adff-bb40eadce078",
+    "companyCode_ID": "06ee4070-b07c-48a9-8087-7c18b70d239a",
+    "purchasingOrganization_ID": "eecb1f99-9fe9-4ddc-a23a-726ecfc508d9",
+    "purchasingGroup_ID": "7cac04f1-e350-473a-9fc7-dbfd4251d894",
+    "documentDate": "2026-10-16",
+    "currency": "INR",
+    "status": "Draft"
+  }'
+
+  ## valid supplier and company  status active && invalid company and purchase org  status active  
+
+curl -i -X POST \
+  'http://localhost:4004/odata/v4/purchase/PurchaseOrders' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "poNumber": "PO20261004",
+    "supplier_ID": "8ed8c241-a387-4fcc-bc2f-f6935ccee03a",
+    "companyCode_ID": "06ee4070-b07c-48a9-8087-7c18b70d239a",
+    "purchasingOrganization_ID": "833da113-f793-419e-9d3a-80e9d7b5b090",
+    "purchasingGroup_ID": "7cac04f1-e350-473a-9fc7-dbfd4251d894",
+    "documentDate": "2026-10-16",
+    "currency": "INR",
+    "status": "Draft"
+  }'
+
+  ## update purchase order
+
+  curl -i -X PATCH \
+  'http://localhost:4004/odata/v4/purchase/PurchaseOrders(f43ed52e-5341-47bf-8bf1-8a6c2fa0bedc)' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "note": "Testing update validation"
+  }'
+
+

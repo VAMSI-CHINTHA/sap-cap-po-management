@@ -6,7 +6,9 @@ module.exports = function () {
     PurchaseOrderItems,
     PurchaseOrders,
     Suppliers,
-    SupplierCompanyAuthorizations
+    SupplierCompanyAuthorizations,
+    PurchasingOrganizations,
+    PurchasingOrgAssignments
   } = this.entities;
 
   // BUSINESS RULE 1:
@@ -19,6 +21,7 @@ module.exports = function () {
 
       let supplierID = data.supplier_ID;
       let companyCodeID = data.companyCode_ID;
+      let purchasingOrganizationID = data.purchasingOrganization_ID;
 
       // For updates, retain existing values when fields are omitted.
       if (req.event === 'UPDATE') {
@@ -37,7 +40,7 @@ module.exports = function () {
 
         const existingPO = await SELECT.one
           .from(PurchaseOrders)
-          .columns('supplier_ID', 'companyCode_ID')
+          .columns('supplier_ID', 'companyCode_ID','purchasingOrganization_ID')
           .where({ ID: poID });
 
         if (!existingPO) {
@@ -51,16 +54,21 @@ module.exports = function () {
         if (companyCodeID === undefined) {
           companyCodeID = existingPO.companyCode_ID;
         }
+
+        if (purchasingOrganizationID === undefined) {
+          purchasingOrganizationID = existingPO.purchasingOrganization_ID;
+        }
       }
 
-      // Both references are required.
-      if (!supplierID || !companyCodeID) {
+      // All references are required.
+      if (!supplierID || !companyCodeID || !purchasingOrganizationID) {
         return req.reject(
           400,
-          'Supplier and company code are required'
+          'Supplier, Company code and Purchase organization are required'
         );
       }
-
+    // checks for SupplierCompanyAuthorizations
+    
       // Check 1: Supplier must exist.
       const supplier = await SELECT.one
         .from(Suppliers)
@@ -98,9 +106,134 @@ module.exports = function () {
           'Supplier is not authorized for the selected company code'
         );
       }
+
+    // checks for PurchasingOrgAssignments
+
+      // Check 1: Supplier must exist.
+      const purchaseOrg = await SELECT.one
+        .from(PurchasingOrganizations)
+        .columns('ID')
+        .where({ ID: purchasingOrganizationID });
+
+      if (!purchaseOrg) {
+        return req.reject(
+          400,
+          'Selected Purchase Organization does not exist'
+        );
+      }
+
+      // Check 2: Supplier must be authorized for this company code.
+      const authorizationForPurchasingOrgAssignments = await SELECT.one
+        .from(PurchasingOrgAssignments)
+        .columns('ID')
+        .where({
+          purchasingOrganization_ID: purchasingOrganizationID,
+          companyCode_ID: companyCodeID,
+          status: 'Active'
+        });
+
+      if (!authorizationForPurchasingOrgAssignments) {
+        return req.reject(
+          400,
+          'Purchase organization is not authorized for the selected company code'
+        );
+      }
     }
   );
 
+    // BUSINESS RULE 1:
+  // Supplier must be active and authorized for the company code.
+  // this.before(
+  //   ['CREATE', 'UPDATE'],
+  //   'PurchaseOrders',
+  //   async (req) => {
+  //     const data = req.data;
+
+  //     let supplierID = data.supplier_ID;
+  //     let companyCodeID = data.companyCode_ID;
+
+  //     // For updates, retain existing values when fields are omitted.
+  //     if (req.event === 'UPDATE') {
+  //       const key = req.params?.[0];
+
+  //       const poID =
+  //         data.ID ||
+  //         (typeof key === 'string' ? key : key?.ID);
+
+  //       if (!poID) {
+  //         return req.reject(
+  //           400,
+  //           'Unable to identify the purchase order'
+  //         );
+  //       }
+
+  //       const existingPO = await SELECT.one
+  //         .from(PurchaseOrders)
+  //         .columns('supplier_ID', 'companyCode_ID')
+  //         .where({ ID: poID });
+
+  //       if (!existingPO) {
+  //         return req.reject(404, 'Purchase order not found');
+  //       }
+
+  //       if (supplierID === undefined) {
+  //         supplierID = existingPO.supplier_ID;
+  //       }
+
+  //       if (companyCodeID === undefined) {
+  //         companyCodeID = existingPO.companyCode_ID;
+  //       }
+  //     }
+
+  //     // Both references are required.
+  //     if (!supplierID || !companyCodeID) {
+  //       return req.reject(
+  //         400,
+  //         'Supplier and company code are required'
+  //       );
+  //     }
+
+  //     // Check 1: Supplier must exist.
+  //     const supplier = await SELECT.one
+  //       .from(Suppliers)
+  //       .columns('ID', 'status')
+  //       .where({ ID: supplierID });
+
+  //     if (!supplier) {
+  //       return req.reject(
+  //         400,
+  //         'Selected supplier does not exist'
+  //       );
+  //     }
+
+  //     // Check 2: Supplier must be active.
+  //     if (supplier.status !== 'Active') {
+  //       return req.reject(
+  //         400,
+  //         'Only active suppliers can be used in purchase orders'
+  //       );
+  //     }
+
+  //     // Check 3: Supplier must be authorized for this company code.
+  //     const authorization = await SELECT.one
+  //       .from(SupplierCompanyAuthorizations)
+  //       .columns('ID')
+  //       .where({
+  //         supplier_ID: supplierID,
+  //         companyCode_ID: companyCodeID,
+  //         status: 'Active'
+  //       });
+
+  //     if (!authorization) {
+  //       return req.reject(
+  //         400,
+  //         'Supplier is not authorized for the selected company code'
+  //       );
+  //     }
+  //   }
+  // );
+
+  
   // Calculate line total before saving an item.
   this.before(
     ['CREATE', 'UPDATE'],
