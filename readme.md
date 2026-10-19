@@ -111,13 +111,13 @@ The model uses CAP's `cuid` and `managed` aspects where appropriate. These provi
 
 ## Implemented Business Logic
 
-### 1. Automatic item total calculation
+### 1. Automatic item total calculation **This validation is implemented and tested**.
 
 The CAP backend calculates the line total using quantity and unit price rather than relying on a client-provided total.
 
 `Line Total = Quantity × Unit Price`
 
-### 2. Automatic purchase order total
+### 2. Automatic purchase order total **This validation is implemented and tested**.
 
 After an item is created or updated, the backend sums the line totals for the associated purchase order and updates its `totalAmount`.
 
@@ -125,11 +125,11 @@ After an item is created or updated, the backend sums the line totals for the as
 
 ### Business Rules In Progress
 
-#### Supplier status and company-code authorization
+#### Supplier status and company-code authorization. **This validation is implemented and tested**.
 
 The intended rule is to allow a purchase order only when the selected supplier is active and has an active authorization record for the selected company code.
 
-This validation is **not yet implemented and tested**.
+This validation is **implemented and tested**.
 
 ### 1. Automatic item total calculation
 
@@ -605,3 +605,146 @@ GitHub: https://github.com/VAMSI-CHINTHA/sap-cap-po-management
 ---
 
 **Project objective:** Build a procurement application using SAP CAP with reliable server-side business logic and an OData API that can support an enterprise-style SAP Fiori experience.
+
+
+
+
+## For Suppliers creation from terminal 
+
+curl -i -X POST \
+  'http://localhost:4004/odata/v4/purchase/Suppliers' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "supplierNumber": "SUP002",
+    "name": "Tech Solutions",
+    "city": "Hyderabad",
+    "contact": "Rahul Sharma",
+    "email": "rahul@techsolutions.example",
+    "phone": "9876500001",
+    "address": "HITEC City, Hyderabad",
+    "status": "Active"
+  }'
+
+-------------------------------------------------------------------------------------------------
+
+## For CompanyCodes creation from terminal
+
+curl -i -X POST \
+  'http://localhost:4004/odata/v4/purchase/CompanyCodes' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "code": "IN02",
+    "description": "South India Operations"
+  }'
+
+-------------------------------------------------------------------------------------------------
+
+## For Create purchasing organizations
+
+curl -i -X POST \
+  'http://localhost:4004/odata/v4/purchase/PurchasingOrganizations' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "code": "PO02",
+    "description": "South India Procurement"
+  }'
+
+
+
+ ## Create purchasing groups
+
+  curl -i -X POST \
+  'http://localhost:4004/odata/v4/purchase/PurchasingGroups' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "code": "IT02",
+    "description": "Hardware Procurement Team"
+  }'
+
+ -------------------------------------------------------------------------------------------------
+
+
+## Create Materials
+
+ curl -i -X POST \
+  'http://localhost:4004/odata/v4/purchase/Materials' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "materialNumber": "MON001",
+    "description": "Business Monitor",
+    "unit": "EA"
+  }'
+
+  -------------------------------------------------------------------------------------------------
+
+  ## Create supplier–company authorization records
+
+  curl -i -X POST \
+  'http://localhost:4004/odata/v4/purchase/SupplierCompanyAuthorizations' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "supplier_ID": "ac6b00a4-5618-4888-adff-bb40eadce078",
+    "companyCode_ID": "10116124-c9df-483a-bd61-217b0c34da2e",
+    "status": "Active"
+  }'
+
+  -------------------------------------------------------------------------------------------------
+
+  ## Create supplier–material records
+
+  curl -i -X POST \
+  'http://localhost:4004/odata/v4/purchase/SupplierMaterials' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "supplier_ID": "ac6b00a4-5618-4888-adff-bb40eadce078",
+    "material_ID": "0d6866f0-e2b4-40a7-8037-f5a8644b1310",
+    "unitPrice": 15000,
+    "currency": "INR",
+    "status": "Active"
+  }'
+
+-------------------------------------------------------------------------------------------------
+
+## Create company–material records
+
+curl -i -X POST \
+  'http://localhost:4004/odata/v4/purchase/CompanyMaterials' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "companyCode_ID": "10116124-c9df-483a-bd61-217b0c34da2e",
+    "material_ID": "0d6866f0-e2b4-40a7-8037-f5a8644b1310",
+    "status": "Active"
+  }'
+-------------------------------------------------------------------------------------------------
+
+## Create purchasing organization assignments
+
+curl -i -X POST \
+  'http://localhost:4004/odata/v4/purchase/PurchasingOrgAssignments' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "companyCode_ID": "10116124-c9df-483a-bd61-217b0c34da2e",
+    "purchasingOrganization_ID": "833da113-f793-419e-9d3a-80e9d7b5b090",
+    "status": "Active"
+  }'
+-------------------------------------------------------------------------------------------------
+
+
+## Create PurchaseOrders
+
+curl -i -X POST \
+  'http://localhost:4004/odata/v4/purchase/PurchaseOrders' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "poNumber": "PO20261001",
+    "supplier_ID": "ac6b00a4-5618-4888-adff-bb40eadce078",
+    "companyCode_ID": "10116124-c9df-483a-bd61-217b0c34da2e",
+    "purchasingOrganization_ID": "833da113-f793-419e-9d3a-80e9d7b5b090",
+    "purchasingGroup_ID": "7cac04f1-e350-473a-9fc7-dbfd4251d894",
+    "documentDate": "2026-10-16",
+    "currency": "INR",
+    "status": "Draft"
+  }'
+
+-------------------------------------------------------------------------------------------------
+
