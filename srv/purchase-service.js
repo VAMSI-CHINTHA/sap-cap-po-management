@@ -11,7 +11,8 @@ module.exports = function () {
     PurchasingOrganizations,
     PurchasingOrgAssignments,
     SupplierMaterials,
-    CompanyMaterials
+    CompanyMaterials,
+    ApprovalRequests
   } = this.entities;
 
   // Helper: identify the record being updated.
@@ -108,6 +109,115 @@ module.exports = function () {
     }
   }
 
+  // Reusable validation and pricing logic for purchase order items.
+  async function preparePurchaseOrderItem(
+    item,
+    purchaseOrder,
+    req,
+    existingItem = null
+  ) {
+    const materialID = item.material_ID ??
+      existingItem?.material_ID;
+
+    const quantity = item.quantity ??
+      existingItem?.quantity;
+
+    if (!materialID) {
+      return req.reject(400, 'Material is required');
+    }
+
+    // Validate that the material exists.
+    const material = await SELECT.one
+      .from(Materials)
+      .columns('ID')
+      .where({ ID: materialID });
+
+    if (!material) {
+      return req.reject(400, 'Selected material does not exist');
+    }
+
+    // Validate supplier-material relationship and retrieve agreed price.
+    const supplierMaterial = await SELECT.one
+      .from(SupplierMaterials)
+      .columns('ID', 'unitPrice', 'currency')
+      .where({
+        supplier_ID: purchaseOrder.supplier_ID,
+        material_ID: materialID,
+        status: 'Active'
+      });
+
+    if (!supplierMaterial) {
+      return req.reject(
+        400,
+        'Supplier is not authorized to provide the selected material'
+      );
+    }
+
+    if (
+      supplierMaterial.unitPrice == null ||
+      !Number.isFinite(Number(supplierMaterial.unitPrice)) ||
+      Number(supplierMaterial.unitPrice) < 0
+    ) {
+      return req.reject(
+        400,
+        'The agreed supplier price is missing or invalid'
+      );
+    }
+
+    // Validate currency.
+    if (
+      supplierMaterial.currency &&
+      purchaseOrder.currency &&
+      supplierMaterial.currency !== purchaseOrder.currency
+    ) {
+      return req.reject(
+        400,
+        'Supplier price currency does not match purchase order currency'
+      );
+    }
+
+    // Validate company-material relationship.
+    const companyMaterial = await SELECT.one
+      .from(CompanyMaterials)
+      .columns('ID')
+      .where({
+        companyCode_ID: purchaseOrder.companyCode_ID,
+        material_ID: materialID,
+        status: 'Active'
+      });
+
+    if (!companyMaterial) {
+      return req.reject(
+        400,
+        'Material is not authorized for the selected company code'
+      );
+    }
+
+    // Validate quantity.
+    if (
+      quantity == null ||
+      !Number.isFinite(Number(quantity)) ||
+      Number(quantity) <= 0
+    ) {
+      return req.reject(400, 'Quantity must be greater than zero');
+    }
+
+    // Preserve the original agreed-price snapshot on quantity-only updates.
+    const materialChanged =
+      existingItem &&
+      materialID !== existingItem.material_ID;
+
+    item.unitPrice =
+      !existingItem || materialChanged
+        ? supplierMaterial.unitPrice
+        : existingItem.unitPrice;
+
+    item.lineTotal = Number(
+      (Number(quantity) * Number(item.unitPrice)).toFixed(2)
+    );
+  }
+
+
   // BUSINESS RULES 1–3:
   // Validate supplier, supplier-company authorization,
   // and purchasing organization for every purchase order.
@@ -182,6 +292,30 @@ module.exports = function () {
         companyCodeID,
         req
       );
+
+      // Process nested items during PO creation.
+      if (req.event === 'CREATE' && data.items?.length) {
+        const purchaseOrderData = {
+          supplier_ID: supplierID,
+          companyCode_ID: companyCodeID,
+          purchasingOrganization_ID: purchasingOrganizationID,
+          currency: data.currency
+        };
+
+        let totalAmount = 0;
+
+        for (const item of data.items) {
+          await preparePurchaseOrderItem(
+            item,
+            purchaseOrderData,
+            req
+          );
+
+          totalAmount += Number(item.lineTotal);
+        }
+
+        data.totalAmount = Number(totalAmount.toFixed(2));
+      }
     }
   );
 
@@ -284,109 +418,12 @@ module.exports = function () {
         req
       );
 
-      // Check that the material exists.
-      const material = await SELECT.one
-        .from(Materials)
-        .columns('ID')
-        .where({ ID: materialID });
-
-      if (!material) {
-        return req.reject(
-          400,
-          'Selected material does not exist'
-        );
-      }
-
-      // Find the previously agreed price for this supplier
-      // and material.
-      const supplierMaterial = await SELECT.one
-        .from(SupplierMaterials)
-        .columns('ID', 'unitPrice', 'currency')
-        .where({
-          supplier_ID: purchaseOrder.supplier_ID,
-          material_ID: materialID,
-          status: 'Active'
-        });
-
-      if (!supplierMaterial) {
-        return req.reject(
-          400,
-          'Supplier is not authorized to provide the selected material'
-        );
-      }
-
-      // Validate the agreed price stored in the supplier catalog.
-      if (
-        supplierMaterial.unitPrice == null ||
-        !Number.isFinite(Number(supplierMaterial.unitPrice)) ||
-        Number(supplierMaterial.unitPrice) < 0
-      ) {
-        return req.reject(
-          400,
-          'The agreed supplier price is missing or invalid'
-        );
-      }
-
-      // Ensure the supplier price uses the PO currency.
-      if (
-        supplierMaterial.currency &&
-        purchaseOrder.currency &&
-        supplierMaterial.currency !== purchaseOrder.currency
-      ) {
-        return req.reject(
-          400,
-          'Supplier price currency does not match purchase order currency'
-        );
-      }
-
-      // The material must be allowed for this company code.
-      const companyMaterial = await SELECT.one
-        .from(CompanyMaterials)
-        .columns('ID')
-        .where({
-          companyCode_ID: purchaseOrder.companyCode_ID,
-          material_ID: materialID,
-          status: 'Active'
-        });
-
-      if (!companyMaterial) {
-        return req.reject(
-          400,
-          'Material is not authorized for the selected company code'
-        );
-      }
-
-      // Quantity must be greater than zero.
-      if (
-        quantity == null ||
-        !Number.isFinite(Number(quantity)) ||
-        Number(quantity) <= 0
-      ) {
-        return req.reject(
-          400,
-          'Quantity must be greater than zero'
-        );
-      }
-
-      // Use the agreed supplier price on CREATE or when the
-      // material changes. Otherwise, preserve the saved price
-      // snapshot for quantity-only updates.
-      const materialChanged =
-        existingItem &&
-        materialID !== existingItem.material_ID;
-
-      if (!existingItem || materialChanged) {
-        data.unitPrice = supplierMaterial.unitPrice;
-      } else {
-        data.unitPrice = existingItem.unitPrice;
-      }
-
-      // Always calculate the line total on the server.
-      // Ignore any client-provided lineTotal.
-      data.lineTotal = Number(
-        (
-          Number(quantity) * Number(data.unitPrice)
-        ).toFixed(2)
+      // Apply reusable validation and pricing logic.
+      await preparePurchaseOrderItem(
+        data,
+        purchaseOrder,
+        req,
+        existingItem
       );
     }
   );
@@ -495,5 +532,353 @@ module.exports = function () {
         .where({ ID: purchaseOrderID });
     }
   );
+
+
+  // APPROVAL WORKFLOW:
+  // Submit a purchase order for approval.
+  this.on(
+    'submitForApproval',
+    'PurchaseOrders',
+    async (req) => {
+      const poID = req.params?.[0]?.ID;
+
+      // 1. Identify the purchase order.
+      if (!poID) {
+        return req.reject(
+          400,
+          'Unable to identify the purchase order'
+        );
+      }
+
+      // 2. Retrieve the purchase order.
+      const purchaseOrder = await SELECT.one
+        .from(PurchaseOrders)
+        .where({ ID: poID });
+
+      if (!purchaseOrder) {
+        return req.reject(
+          404,
+          'Purchase order not found'
+        );
+      }
+
+      // 3. Only Draft or Rejected POs can be submitted.
+      if (
+        !['Draft', 'Rejected'].includes(
+          purchaseOrder.status
+        )
+      ) {
+        return req.reject(
+          400,
+          'Only Draft or Rejected purchase orders can be submitted'
+        );
+      }
+
+      // 4. A PO must contain at least one item.
+      const firstItem = await SELECT.one
+        .from(PurchaseOrderItems)
+        .columns('ID')
+        .where({ purchaseOrder_ID: poID });
+
+      if (!firstItem) {
+        return req.reject(
+          400,
+          'A purchase order must contain at least one item'
+        );
+      }
+
+      // 5. Validate the server-calculated PO total.
+      const totalAmount = Number(
+        purchaseOrder.totalAmount || 0
+      );
+
+      if (
+        !Number.isFinite(totalAmount) ||
+        totalAmount <= 0
+      ) {
+        return req.reject(
+          400,
+          'Purchase order total must be greater than zero'
+        );
+      }
+
+      // 6. Determine the next approval cycle.
+      const previousApprovals = await SELECT
+        .from(ApprovalRequests)
+        .columns('approvalCycle')
+        .where({ purchaseOrder_ID: poID });
+
+      const previousCycle = previousApprovals.reduce(
+        (maximum, approval) =>
+          Math.max(maximum, Number(approval.approvalCycle || 0)),
+        0
+      );
+
+      const approvalCycle = previousCycle + 1;
+
+      // 7. Determine the required approval levels.
+      const approvalEntries = [
+        {
+          purchaseOrder_ID: poID,
+          approvalLevel: 1,
+          approverRole: 'Manager',
+          approvalCycle,
+          decision: 'Pending'
+        }
+      ];
+
+      // Finance approval is required above ₹1,00,000.
+      if (totalAmount > 100000) {
+        approvalEntries.push({
+          purchaseOrder_ID: poID,
+          approvalLevel: 2,
+          approverRole: 'Finance',
+          approvalCycle,
+          decision: 'Pending'
+        });
+      }
+
+      // 8. Create approval records.
+      await INSERT
+        .into(ApprovalRequests)
+        .entries(approvalEntries);
+
+      // 9. Change the PO status.
+      await UPDATE(PurchaseOrders)
+        .set({
+          status: 'Pending Approval'
+        })
+        .where({ ID: poID });
+
+      return `Purchase order submitted successfully. Required approval levels: ${approvalEntries.length}`;
+    }
+  );
+
+
+  // APPROVAL WORKFLOW:
+  // Approve the next pending approval level.
+  this.on(
+    'approvePurchaseOrder',
+    'PurchaseOrders',
+    async (req) => {
+      const poID = getRecordID(req);
+      const comments = req.data.comments;
+
+      if (!poID) {
+        return req.reject(400, 'Unable to identify purchase order');
+      }
+
+      // 1. Retrieve the purchase order.
+      const purchaseOrder = await SELECT.one
+        .from(PurchaseOrders)
+        .where({ ID: poID });
+
+      if (!purchaseOrder) {
+        return req.reject(404, 'Purchase order not found');
+      }
+
+      if (purchaseOrder.status !== 'Pending Approval') {
+        return req.reject(
+          400,
+          'Purchase order is not pending approval'
+        );
+      }
+
+      // 2. Find the latest approval cycle.
+      const allApprovals = await SELECT
+        .from(ApprovalRequests)
+        .where({ purchaseOrder_ID: poID });
+
+      const currentCycle = allApprovals.reduce(
+        (maximum, approval) =>
+          Math.max(maximum, Number(approval.approvalCycle || 0)),
+        0
+      );
+
+      const currentApprovals = allApprovals
+        .filter(
+          approval =>
+            Number(approval.approvalCycle) === currentCycle
+        )
+        .sort(
+          (a, b) => a.approvalLevel - b.approvalLevel
+        );
+
+      if (currentApprovals.length === 0) {
+        return req.reject(
+          400,
+          'No approval records found for the current cycle'
+        );
+      }
+
+      // 3. Find the next pending approval.
+      const nextApproval = currentApprovals.find(
+        approval => approval.decision === 'Pending'
+      );
+
+      if (!nextApproval) {
+        return req.reject(
+          400,
+          'No pending approval is available'
+        );
+      }
+
+      // 4. Ensure previous approval levels are completed.
+      const previousApprovals = currentApprovals.filter(
+        approval =>
+          approval.approvalLevel < nextApproval.approvalLevel
+      );
+
+      const previousLevelNotApproved = previousApprovals.some(
+        approval => approval.decision !== 'Approved'
+      );
+
+      if (previousLevelNotApproved) {
+        return req.reject(
+          400,
+          'Previous approval levels must be approved first'
+        );
+      }
+
+      // 5. Record the approval decision.
+      await UPDATE(ApprovalRequests)
+        .set({
+          decision: 'Approved',
+          comments: comments || null,
+          decidedAt: new Date()
+        })
+        .where({ ID: nextApproval.ID });
+
+      // 6. Check whether more approvals are pending.
+      const moreApprovalsPending = currentApprovals.some(
+        approval =>
+          approval.ID !== nextApproval.ID &&
+          approval.decision === 'Pending'
+      );
+
+      // 7. Complete the PO if all approvals are finished.
+      if (!moreApprovalsPending) {
+        await UPDATE(PurchaseOrders)
+          .set({ status: 'Approved' })
+          .where({ ID: poID });
+
+        return 'All required approvals completed. Purchase order approved.';
+      }
+
+      return `${nextApproval.approverRole} approval completed. Waiting for the next approval level.`;
+    }
+  );
+
+
+  // APPROVAL WORKFLOW:
+  // Reject the next pending approval level.
+  this.on(
+    'rejectPurchaseOrder',
+    'PurchaseOrders',
+    async (req) => {
+      const poID = getRecordID(req);
+      const comments = req.data.comments;
+
+      if (!poID) {
+        return req.reject(400, 'Unable to identify purchase order');
+      }
+
+      if (!comments || !comments.trim()) {
+        return req.reject(
+          400,
+          'Comments are required when rejecting a purchase order'
+        );
+      }
+
+      const purchaseOrder = await SELECT.one
+        .from(PurchaseOrders)
+        .where({ ID: poID });
+
+      if (!purchaseOrder) {
+        return req.reject(404, 'Purchase order not found');
+      }
+
+      if (purchaseOrder.status !== 'Pending Approval') {
+        return req.reject(
+          400,
+          'Purchase order is not pending approval'
+        );
+      }
+
+      // Find the latest approval cycle.
+      const allApprovals = await SELECT
+        .from(ApprovalRequests)
+        .where({ purchaseOrder_ID: poID });
+
+      const currentCycle = allApprovals.reduce(
+        (maximum, approval) =>
+          Math.max(maximum, Number(approval.approvalCycle || 0)),
+        0
+      );
+
+      const currentApprovals = allApprovals
+        .filter(
+          approval =>
+            Number(approval.approvalCycle) === currentCycle
+        )
+        .sort(
+          (a, b) => a.approvalLevel - b.approvalLevel
+        );
+
+      const nextApproval = currentApprovals.find(
+        approval => approval.decision === 'Pending'
+      );
+
+      if (!nextApproval) {
+        return req.reject(
+          400,
+          'No pending approval is available'
+        );
+      }
+
+      const previousLevelNotApproved = currentApprovals.some(
+        approval =>
+          approval.approvalLevel < nextApproval.approvalLevel &&
+          approval.decision !== 'Approved'
+      );
+
+      if (previousLevelNotApproved) {
+        return req.reject(
+          400,
+          'Previous approval levels must be approved first'
+        );
+      }
+
+      // Record rejection.
+      await UPDATE(ApprovalRequests)
+        .set({
+          decision: 'Rejected',
+          comments,
+          decidedAt: new Date()
+        })
+        .where({ ID: nextApproval.ID });
+
+        // Cancel all remaining pending approvals in this cycle.
+      await UPDATE(ApprovalRequests)
+        .set({ 
+          decision: 'Cancelled',
+          decidedAt: new Date()
+         })
+        .where({
+          purchaseOrder_ID: poID,
+          approvalCycle: currentCycle,
+          decision: 'Pending'
+        });
+
+      // Stop the approval workflow.
+      await UPDATE(PurchaseOrders)
+        .set({ status: 'Rejected' })
+        .where({ ID: poID });
+
+      return `${nextApproval.approverRole} rejected the purchase order.`;
+    }
+  );
+
+
 
 };

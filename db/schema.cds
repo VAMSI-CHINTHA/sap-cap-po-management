@@ -68,13 +68,18 @@ entity PurchaseOrderItems : cuid {
   lineTotal     : Decimal(15,2);
 }
 
+
 entity ApprovalRequests : cuid, managed {
-  purchaseOrder : Association to PurchaseOrders @mandatory;
+  purchaseOrder  : Association to PurchaseOrders @mandatory;
+  approvalLevel  : Integer;
+  approverRole   : String(20);
+  approvalCycle  : Integer default 1;
   approver       : String(100);
   decision       : String(20) default 'Pending';
   comments       : LargeString;
   decidedAt      : Timestamp;
 }
+
 
 entity SupplierCompanyAuthorizations : cuid, managed {
   supplier   : Association to Suppliers @mandatory;
