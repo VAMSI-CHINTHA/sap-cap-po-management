@@ -6,28 +6,44 @@ The goal is to build a backend with reliable procurement business rules and expo
 
 ## Project Status
 
-**Current development stage:** CAP backend development.
+## Recent Implementation Updates
 
-Implemented:
-- SAP CAP service and CDS data model
-- PostgreSQL database integration
-- OData V4 endpoints for procurement entities
-- Purchase orders with associated line items
-- Automatic line total calculation on item creation and update
-- Automatic purchase order total calculation after item creation and update
+### 1. Supplier and Purchase Order Validations
+- Validate that the selected supplier exists and is active.
+- Verify supplier authorization for the selected company code.
+- Validate purchasing organization assignments against company codes.
+- Preserve existing supplier and organizational references during partial updates.
 
-In progress:
-- Supplier active-status validation
-- Supplier authorization validation for the selected company code
+### 2. Purchase Order Item Validations
+- Validate that the selected material exists.
+- Verify that the supplier is authorized to provide the selected material.
+- Verify that the material is permitted for the selected company code.
+- Ensure item quantity is greater than zero.
 
-Planned:
-- Supplier–material eligibility validation
-- Company–material eligibility validation
-- Purchasing organization assignment validation
-- Automatic total recalculation after item deletion or reassignment
-- Purchase order approval workflow
-- Custom SAP Fiori UI
-- Automated tests and deployment
+### 3. Supplier Agreed Price Management
+- Automatically retrieve the agreed unit price from `SupplierMaterials`.
+- Do not trust client-provided unit prices.
+- Preserve the existing price snapshot when only the quantity changes.
+- Retrieve the new agreed price when the material is changed.
+- Validate supplier price availability and currency compatibility.
+
+### 4. Automatic Amount Calculations
+- Calculate purchase order item line totals on the backend.
+- Automatically recalculate purchase order totals when items are created or updated.
+- Recalculate purchase order totals when items are deleted.
+- Handle item updates that change their parent purchase order.
+
+### 5. Backend Testing
+The following scenarios have been tested successfully using OData requests:
+
+- Create purchase order items without providing unit prices.
+- Ignore incorrect client-provided unit prices.
+- Preserve agreed prices during quantity updates.
+- Retrieve updated agreed prices when materials change.
+- Reject unauthorized supplier-material combinations.
+- Recalculate purchase order totals after item creation, updates, and deletion.
+
+All pricing and total-calculation test scenarios completed successfully.
 
 ## Technology Stack
 

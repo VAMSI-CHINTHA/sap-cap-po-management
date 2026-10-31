@@ -220,3 +220,298 @@ Changes not staged for commit:
 
 no changes added to commit (use "git add" and/or "git commit -a")
 vamsi@Mac po-management % 
+
+
+
+
+const cds = require('@sap/cds');
+
+module.exports = function () {
+  const {
+    PurchaseOrderItems,
+    PurchaseOrders,
+    Suppliers,
+    Materials,
+    SupplierCompanyAuthorizations,
+    PurchasingOrganizations,
+    PurchasingOrgAssignments,
+    SupplierMaterials,
+    CompanyMaterials
+  } = this.entities;
+
+  // Helper: identify the record being updated.
+  function getRecordID(req) {
+    const key = req.params?.[0];
+
+    return (
+      req.data.ID ||
+      (typeof key === 'string' ? key : key?.ID)
+    );
+  }
+
+  // Helper: validate supplier and company authorization.
+  async function validateSupplier(supplierID, companyCodeID, req) {
+    if (!supplierID || !companyCodeID) {
+      return req.reject(
+        400,
+        'Supplier and company code are required'
+      );
+    }
+
+    const supplier = await SELECT.one
+      .from(Suppliers)
+      .columns('ID', 'status')
+      .where({ ID: supplierID });
+
+    if (!supplier) {
+      return req.reject(400, 'Selected supplier does not exist');
+    }
+
+    if (supplier.status !== 'Active') {
+      return req.reject(
+        400,
+        'Only active suppliers can be used in purchase orders'
+      );
+    }
+
+    const authorization = await SELECT.one
+      .from(SupplierCompanyAuthorizations)
+      .columns('ID')
+      .where({
+        supplier_ID: supplierID,
+        companyCode_ID: companyCodeID,
+        status: 'Active'
+      });
+
+    if (!authorization) {
+      return req.reject(
+        400,
+        'Supplier is not authorized for the selected company code'
+      );
+    }
+  }
+
+  // Helper: validate purchasing organization assignment.
+  async function validatePurchasingOrganization(
+    purchasingOrganizationID,
+    companyCodeID,
+    req
+  ) {
+    if (!purchasingOrganizationID || !companyCodeID) {
+      return req.reject(
+        400,
+        'Purchasing organization and company code are required'
+      );
+    }
+
+    const purchaseOrg = await SELECT.one
+      .from(PurchasingOrganizations)
+      .columns('ID')
+      .where({ ID: purchasingOrganizationID });
+
+    if (!purchaseOrg) {
+      return req.reject(
+        400,
+        'Selected purchasing organization does not exist'
+      );
+    }
+
+    const assignment = await SELECT.one
+      .from(PurchasingOrgAssignments)
+      .columns('ID')
+      .where({
+        purchasingOrganization_ID: purchasingOrganizationID,
+        companyCode_ID: companyCodeID,
+        status: 'Active'
+      });
+
+    if (!assignment) {
+      return req.reject(
+        400,
+        'Purchasing organization is not assigned to the selected company code'
+      );
+    }
+  }
+
+  // BUSINESS RULES 1–3:
+  // Validate supplier, supplier-company authorization,
+  // and purchasing organization for every purchase order.
+  this.before(
+    ['CREATE', 'UPDATE'],
+    'PurchaseOrders',
+    async (req) => {
+      const data = req.data;
+
+      let supplierID = data.supplier_ID;
+      let companyCodeID = data.companyCode_ID;
+      let purchasingOrganizationID =
+        data.purchasingOrganization_ID;
+
+      // On UPDATE, retain existing values for omitted fields.
+      if (req.event === 'UPDATE') {
+        const poID = getRecordID(req);
+
+        if (!poID) {
+          return req.reject(
+            400,
+            'Unable to identify the purchase order'
+          );
+        }
+
+        const existingPO = await SELECT.one
+          .from(PurchaseOrders)
+          .columns(
+            'supplier_ID',
+            'companyCode_ID',
+            'purchasingOrganization_ID'
+          )
+          .where({ ID: poID });
+
+        if (!existingPO) {
+          return req.reject(404, 'Purchase order not found');
+        }
+
+        if (supplierID === undefined) {
+          supplierID = existingPO.supplier_ID;
+        }
+
+        if (companyCodeID === undefined) {
+          companyCodeID = existingPO.companyCode_ID;
+        }
+
+        if (purchasingOrganizationID === undefined) {
+          purchasingOrganizationID =
+            existingPO.purchasingOrganization_ID;
+        }
+      }
+
+      if (
+        !supplierID ||
+        !companyCodeID ||
+        !purchasingOrganizationID
+      ) {
+        return req.reject(
+          400,
+          'Supplier, company code and purchasing organization are required'
+        );
+      }
+
+      await validateSupplier(
+        supplierID,
+        companyCodeID,
+        req
+      );
+
+      await validatePurchasingOrganization(
+        purchasingOrganizationID,
+        companyCodeID,
+        req
+      );
+    }
+  );
+
+  
+
+  this.after(
+    ['CREATE', 'UPDATE'],
+    'PurchaseOrderItems',
+    async (result, req) => {
+      const itemID = result?.ID || getRecordID(req);
+
+      let currentPurchaseOrderID =
+        result?.purchaseOrder_ID ||
+        req.data.purchaseOrder_ID;
+
+      // If the parent wasn't in the request, look it up.
+      if (!currentPurchaseOrderID && itemID) {
+        const item = await SELECT.one
+          .from(PurchaseOrderItems)
+          .columns('purchaseOrder_ID')
+          .where({ ID: itemID });
+
+        currentPurchaseOrderID = item?.purchaseOrder_ID;
+      }
+
+      // Recalculate the current and, if applicable, old parent.
+      const purchaseOrderIDs = [
+        currentPurchaseOrderID,
+        req._previousPurchaseOrderID
+      ].filter(
+        (id, index, ids) => id && ids.indexOf(id) === index
+      );
+
+      for (const purchaseOrderID of purchaseOrderIDs) {
+        const items = await SELECT.from(PurchaseOrderItems)
+          .columns('lineTotal')
+          .where({ purchaseOrder_ID: purchaseOrderID });
+
+        const total = items.reduce(
+          (sum, item) => sum + Number(item.lineTotal || 0),
+          0
+        );
+
+        await UPDATE(PurchaseOrders)
+          .set({ totalAmount: Number(total.toFixed(2)) })
+          .where({ ID: purchaseOrderID });
+      }
+    }
+  );
+
+
+  // Capture the parent purchase order before the item is deleted.
+  this.before(
+    'DELETE',
+    'PurchaseOrderItems',
+    async (req) => {
+      const itemID = getRecordID(req);
+
+      if (!itemID) {
+        return req.reject(
+          400,
+          'Unable to identify the purchase order item'
+        );
+      }
+
+      const item = await SELECT.one
+        .from(PurchaseOrderItems)
+        .columns('purchaseOrder_ID')
+        .where({ ID: itemID });
+
+      if (!item) {
+        return req.reject(
+          404,
+          'Purchase order item not found'
+        );
+      }
+
+      // Save the parent ID for the after-delete handler.
+      req._deletedItemPurchaseOrderID = item.purchaseOrder_ID;
+    }
+  );
+
+  // Recalculate the parent total after the item is deleted.
+  this.after(
+    'DELETE',
+    'PurchaseOrderItems',
+    async (result, req) => {
+      const purchaseOrderID =
+        req._deletedItemPurchaseOrderID;
+
+      if (!purchaseOrderID) return;
+
+      const remainingItems = await SELECT.from(PurchaseOrderItems)
+        .columns('lineTotal')
+        .where({ purchaseOrder_ID: purchaseOrderID });
+
+      const total = remainingItems.reduce(
+        (sum, item) => sum + Number(item.lineTotal || 0),
+        0
+      );
+
+      await UPDATE(PurchaseOrders)
+        .set({ totalAmount: Number(total.toFixed(2)) })
+        .where({ ID: purchaseOrderID });
+    }
+  );
+
+};

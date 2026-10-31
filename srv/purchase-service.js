@@ -185,9 +185,9 @@ module.exports = function () {
     }
   );
 
+  
   // BUSINESS RULES 4–7:
-  // Validate each item's material, quantity and price,
-  // then calculate its line total.
+  // Validate each item and retrieve its agreed supplier price.
   this.before(
     ['CREATE', 'UPDATE'],
     'PurchaseOrderItems',
@@ -195,7 +195,6 @@ module.exports = function () {
       const data = req.data;
 
       let quantity = data.quantity;
-      let unitPrice = data.unitPrice;
       let materialID = data.material_ID;
       let purchaseOrderID = data.purchaseOrder_ID;
 
@@ -233,10 +232,6 @@ module.exports = function () {
           quantity = existingItem.quantity;
         }
 
-        if (unitPrice === undefined) {
-          unitPrice = existingItem.unitPrice;
-        }
-
         if (materialID === undefined) {
           materialID = existingItem.material_ID;
         }
@@ -245,7 +240,7 @@ module.exports = function () {
           purchaseOrderID = existingItem.purchaseOrder_ID;
         }
 
-        // Remember the old parent in case this item is moved.
+        // Remember the old parent if the item is moved.
         req._previousPurchaseOrderID =
           existingItem.purchaseOrder_ID;
       }
@@ -264,7 +259,8 @@ module.exports = function () {
           'ID',
           'supplier_ID',
           'companyCode_ID',
-          'purchasingOrganization_ID'
+          'purchasingOrganization_ID',
+          'currency'
         )
         .where({ ID: purchaseOrderID });
 
@@ -275,7 +271,7 @@ module.exports = function () {
         );
       }
 
-      // Revalidate the parent references before accepting an item.
+      // Revalidate the parent references.
       await validateSupplier(
         purchaseOrder.supplier_ID,
         purchaseOrder.companyCode_ID,
@@ -301,11 +297,11 @@ module.exports = function () {
         );
       }
 
-      // BUSINESS RULE 4:
-      // Supplier must be authorized to provide this material.
+      // Find the previously agreed price for this supplier
+      // and material.
       const supplierMaterial = await SELECT.one
         .from(SupplierMaterials)
-        .columns('ID')
+        .columns('ID', 'unitPrice', 'currency')
         .where({
           supplier_ID: purchaseOrder.supplier_ID,
           material_ID: materialID,
@@ -319,8 +315,31 @@ module.exports = function () {
         );
       }
 
-      // BUSINESS RULE 5:
-      // Material must be allowed for this company code.
+      // Validate the agreed price stored in the supplier catalog.
+      if (
+        supplierMaterial.unitPrice == null ||
+        !Number.isFinite(Number(supplierMaterial.unitPrice)) ||
+        Number(supplierMaterial.unitPrice) < 0
+      ) {
+        return req.reject(
+          400,
+          'The agreed supplier price is missing or invalid'
+        );
+      }
+
+      // Ensure the supplier price uses the PO currency.
+      if (
+        supplierMaterial.currency &&
+        purchaseOrder.currency &&
+        supplierMaterial.currency !== purchaseOrder.currency
+      ) {
+        return req.reject(
+          400,
+          'Supplier price currency does not match purchase order currency'
+        );
+      }
+
+      // The material must be allowed for this company code.
       const companyMaterial = await SELECT.one
         .from(CompanyMaterials)
         .columns('ID')
@@ -337,7 +356,6 @@ module.exports = function () {
         );
       }
 
-      // BUSINESS RULE 6:
       // Quantity must be greater than zero.
       if (
         quantity == null ||
@@ -350,26 +368,29 @@ module.exports = function () {
         );
       }
 
-      // Unit price must be zero or greater.
-      if (
-        unitPrice == null ||
-        !Number.isFinite(Number(unitPrice)) ||
-        Number(unitPrice) < 0
-      ) {
-        return req.reject(
-          400,
-          'Unit price cannot be negative'
-        );
+      // Use the agreed supplier price on CREATE or when the
+      // material changes. Otherwise, preserve the saved price
+      // snapshot for quantity-only updates.
+      const materialChanged =
+        existingItem &&
+        materialID !== existingItem.material_ID;
+
+      if (!existingItem || materialChanged) {
+        data.unitPrice = supplierMaterial.unitPrice;
+      } else {
+        data.unitPrice = existingItem.unitPrice;
       }
 
-      // BUSINESS RULE 7:
-      // Calculate the line total on the server.
-      // Never trust a client-provided lineTotal.
+      // Always calculate the line total on the server.
+      // Ignore any client-provided lineTotal.
       data.lineTotal = Number(
-        (Number(quantity) * Number(unitPrice)).toFixed(2)
+        (
+          Number(quantity) * Number(data.unitPrice)
+        ).toFixed(2)
       );
     }
   );
+
 
   // BUSINESS RULE 8:
   // Recalculate purchase order totals after item changes.
