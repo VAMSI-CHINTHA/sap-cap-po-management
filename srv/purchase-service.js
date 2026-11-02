@@ -600,10 +600,15 @@ module.exports = function () {
         );
       }
 
-      // 2. Retrieve the purchase order.
+      // // 2. Retrieve the purchase order.
+      // const purchaseOrder = await SELECT.one
+      //   .from(PurchaseOrders)
+      //   .where({ ID: poID });
+
       const purchaseOrder = await SELECT.one
-        .from(PurchaseOrders)
-        .where({ ID: poID });
+      .from(PurchaseOrders)
+      .where({ ID: poID })
+      .forUpdate();
 
       if (!purchaseOrder) {
         return req.reject(
@@ -721,7 +726,7 @@ module.exports = function () {
       // 1. Retrieve the purchase order.
       const purchaseOrder = await SELECT.one
         .from(PurchaseOrders)
-        .where({ ID: poID });
+        .where({ ID: poID }).forUpdate();
 
       if (!purchaseOrder) {
         return req.reject(404, 'Purchase order not found');
@@ -842,7 +847,7 @@ module.exports = function () {
 
       const purchaseOrder = await SELECT.one
         .from(PurchaseOrders)
-        .where({ ID: poID });
+        .where({ ID: poID }).forUpdate();
 
       if (!purchaseOrder) {
         return req.reject(404, 'Purchase order not found');
