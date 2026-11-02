@@ -25,6 +25,34 @@ module.exports = function () {
     );
   }
 
+  // Check whether a purchase order can be modified.
+  async function ensurePurchaseOrderEditable(poID, req) {
+    if (!poID) {
+      return req.reject(
+        400,
+        'Unable to identify the purchase order'
+      );
+    }
+
+    const purchaseOrder = await SELECT.one
+      .from(PurchaseOrders)
+      .columns('ID', 'status')
+      .where({ ID: poID });
+
+    if (!purchaseOrder) {
+      return req.reject(404, 'Purchase order not found');
+    }
+
+    if (!['Draft', 'Rejected'].includes(purchaseOrder.status)) {
+      return req.reject(
+        400,
+        `Purchase order cannot be modified when its status is '${purchaseOrder.status}'`
+      );
+    }
+
+    return purchaseOrder;
+  }
+
   // Helper: validate supplier and company authorization.
   async function validateSupplier(supplierID, companyCodeID, req) {
     if (!supplierID || !companyCodeID) {
@@ -236,6 +264,9 @@ module.exports = function () {
       if (req.event === 'UPDATE') {
         const poID = getRecordID(req);
 
+        // Prevent editing POs that are under approval or already approved.
+        await ensurePurchaseOrderEditable(poID, req);
+
         if (!poID) {
           return req.reject(
             400,
@@ -379,6 +410,16 @@ module.exports = function () {
           existingItem.purchaseOrder_ID;
       }
 
+      // Purchase order items cannot be moved between purchase orders.
+      if (
+        purchaseOrderID !== existingItem.purchaseOrder_ID
+      ) {
+        return req.reject(
+          400,
+          'Purchase order items cannot be moved between purchase orders'
+        );
+      }
+
       if (!purchaseOrderID || !materialID) {
         return req.reject(
           400,
@@ -404,6 +445,9 @@ module.exports = function () {
           'The selected purchase order does not exist'
         );
       }
+
+      // Prevent adding or modifying items on locked purchase orders.
+      await ensurePurchaseOrderEditable(purchaseOrderID, req);
 
       // Revalidate the parent references.
       await validateSupplier(
@@ -502,6 +546,12 @@ module.exports = function () {
           'Purchase order item not found'
         );
       }
+
+      // Prevent deleting items from locked purchase orders.
+      await ensurePurchaseOrderEditable(
+        item.purchaseOrder_ID,
+        req
+      );
 
       // Save the parent ID for the after-delete handler.
       req._deletedItemPurchaseOrderID = item.purchaseOrder_ID;
