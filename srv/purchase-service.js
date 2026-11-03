@@ -1,4 +1,3 @@
-
 const cds = require('@sap/cds');
 
 module.exports = function () {
@@ -137,115 +136,6 @@ module.exports = function () {
     }
   }
 
-  // Reusable validation and pricing logic for purchase order items.
-  async function preparePurchaseOrderItem(
-    item,
-    purchaseOrder,
-    req,
-    existingItem = null
-  ) {
-    const materialID = item.material_ID ??
-      existingItem?.material_ID;
-
-    const quantity = item.quantity ??
-      existingItem?.quantity;
-
-    if (!materialID) {
-      return req.reject(400, 'Material is required');
-    }
-
-    // Validate that the material exists.
-    const material = await SELECT.one
-      .from(Materials)
-      .columns('ID')
-      .where({ ID: materialID });
-
-    if (!material) {
-      return req.reject(400, 'Selected material does not exist');
-    }
-
-    // Validate supplier-material relationship and retrieve agreed price.
-    const supplierMaterial = await SELECT.one
-      .from(SupplierMaterials)
-      .columns('ID', 'unitPrice', 'currency')
-      .where({
-        supplier_ID: purchaseOrder.supplier_ID,
-        material_ID: materialID,
-        status: 'Active'
-      });
-
-    if (!supplierMaterial) {
-      return req.reject(
-        400,
-        'Supplier is not authorized to provide the selected material'
-      );
-    }
-
-    if (
-      supplierMaterial.unitPrice == null ||
-      !Number.isFinite(Number(supplierMaterial.unitPrice)) ||
-      Number(supplierMaterial.unitPrice) < 0
-    ) {
-      return req.reject(
-        400,
-        'The agreed supplier price is missing or invalid'
-      );
-    }
-
-    // Validate currency.
-    if (
-      supplierMaterial.currency &&
-      purchaseOrder.currency &&
-      supplierMaterial.currency !== purchaseOrder.currency
-    ) {
-      return req.reject(
-        400,
-        'Supplier price currency does not match purchase order currency'
-      );
-    }
-
-    // Validate company-material relationship.
-    const companyMaterial = await SELECT.one
-      .from(CompanyMaterials)
-      .columns('ID')
-      .where({
-        companyCode_ID: purchaseOrder.companyCode_ID,
-        material_ID: materialID,
-        status: 'Active'
-      });
-
-    if (!companyMaterial) {
-      return req.reject(
-        400,
-        'Material is not authorized for the selected company code'
-      );
-    }
-
-    // Validate quantity.
-    if (
-      quantity == null ||
-      !Number.isFinite(Number(quantity)) ||
-      Number(quantity) <= 0
-    ) {
-      return req.reject(400, 'Quantity must be greater than zero');
-    }
-
-    // Preserve the original agreed-price snapshot on quantity-only updates.
-    const materialChanged =
-      existingItem &&
-      materialID !== existingItem.material_ID;
-
-    item.unitPrice =
-      !existingItem || materialChanged
-        ? supplierMaterial.unitPrice
-        : existingItem.unitPrice;
-
-    item.lineTotal = Number(
-      (Number(quantity) * Number(item.unitPrice)).toFixed(2)
-    );
-  }
-
-
   // BUSINESS RULES 1–3:
   // Validate supplier, supplier-company authorization,
   // and purchasing organization for every purchase order.
@@ -263,6 +153,14 @@ module.exports = function () {
       // On UPDATE, retain existing values for omitted fields.
       if (req.event === 'UPDATE') {
         const poID = getRecordID(req);
+
+        // PO total is system-calculated and cannot be changed manually.
+        if (data.totalAmount !== undefined) {
+          return req.reject(
+            400,
+            'Purchase order total is system-calculated and cannot be modified manually'
+          );
+        }
 
         // Prevent editing POs that are under approval or already approved.
         await ensurePurchaseOrderEditable(poID, req);
@@ -350,9 +248,139 @@ module.exports = function () {
     }
   );
 
-  
+  // Validate an item and calculate its price and line total.
+  async function preparePurchaseOrderItem(
+    item,
+    purchaseOrder,
+    req,
+    existingItem = null
+  ) {
+    const materialID =
+      item.material_ID ?? existingItem?.material_ID;
+
+    const quantity =
+      item.quantity ?? existingItem?.quantity;
+
+    if (!materialID) {
+      return req.reject(400, 'Material is required');
+    }
+
+    // Validate that the material exists.
+    const material = await SELECT.one
+      .from(Materials)
+      .columns('ID')
+      .where({ ID: materialID });
+
+    if (!material) {
+      return req.reject(
+        400,
+        'Selected material does not exist'
+      );
+    }
+
+    // Validate supplier-material relationship and retrieve agreed price.
+    const supplierMaterial = await SELECT.one
+      .from(SupplierMaterials)
+      .columns('ID', 'unitPrice', 'currency')
+      .where({
+        supplier_ID: purchaseOrder.supplier_ID,
+        material_ID: materialID,
+        status: 'Active'
+      });
+
+    if (!supplierMaterial) {
+      return req.reject(
+        400,
+        'Supplier is not authorized to provide the selected material'
+      );
+    }
+
+    if (
+      supplierMaterial.unitPrice == null ||
+      !Number.isFinite(Number(supplierMaterial.unitPrice)) ||
+      Number(supplierMaterial.unitPrice) < 0
+    ) {
+      return req.reject(
+        400,
+        'The agreed supplier price is missing or invalid'
+      );
+    }
+
+    // Validate currency.
+    if (
+      supplierMaterial.currency &&
+      purchaseOrder.currency &&
+      supplierMaterial.currency !== purchaseOrder.currency
+    ) {
+      return req.reject(
+        400,
+        'Supplier price currency does not match purchase order currency'
+      );
+    }
+
+    // Validate company-material relationship.
+    const companyMaterial = await SELECT.one
+      .from(CompanyMaterials)
+      .columns('ID')
+      .where({
+        companyCode_ID: purchaseOrder.companyCode_ID,
+        material_ID: materialID,
+        status: 'Active'
+      });
+
+    if (!companyMaterial) {
+      return req.reject(
+        400,
+        'Material is not authorized for the selected company code'
+      );
+    }
+
+    // Validate quantity.
+    if (
+      quantity == null ||
+      !Number.isFinite(Number(quantity)) ||
+      Number(quantity) <= 0
+    ) {
+      return req.reject(
+        400,
+        'Quantity must be greater than zero'
+      );
+    }
+
+    // Check whether the material has changed.
+    const materialChanged =
+      existingItem &&
+      materialID !== existingItem.material_ID;
+
+    // Validate and preserve the agreed supplier price.
+    const agreedPrice = Number(supplierMaterial.unitPrice);
+
+    if (
+      existingItem &&
+      item.unitPrice !== undefined &&
+      Number(item.unitPrice) !== Number(existingItem.unitPrice) &&
+      Number(item.unitPrice) !== agreedPrice
+    ) {
+      return req.reject(
+        400,
+        `Entered unit price does not match the agreed supplier price of ${agreedPrice.toFixed(2)}`
+      );
+    }
+
+    // Use agreed price for new items or changed materials.
+    if (!existingItem || materialChanged) {
+      item.unitPrice = supplierMaterial.unitPrice;
+    } else {
+      item.unitPrice = existingItem.unitPrice;
+    }
+
+    // Calculate line total.
+    item.lineTotal = Number(
+      (Number(quantity) * Number(item.unitPrice)).toFixed(2)
+    );
+  }
   // BUSINESS RULES 4–7:
-  // Validate each item and retrieve its agreed supplier price.
+  // Validate each item and calculate its line total.
   this.before(
     ['CREATE', 'UPDATE'],
     'PurchaseOrderItems',
@@ -365,7 +393,7 @@ module.exports = function () {
 
       let existingItem = null;
 
-      // On UPDATE, load existing values when omitted.
+      // Load the existing item during UPDATE.
       if (req.event === 'UPDATE') {
         const itemID = getRecordID(req);
 
@@ -405,13 +433,13 @@ module.exports = function () {
           purchaseOrderID = existingItem.purchaseOrder_ID;
         }
 
-        // Remember the old parent if the item is moved.
         req._previousPurchaseOrderID =
           existingItem.purchaseOrder_ID;
       }
 
-      // Purchase order items cannot be moved between purchase orders.
+      // Prevent moving items between purchase orders.
       if (
+        existingItem &&
         purchaseOrderID !== existingItem.purchaseOrder_ID
       ) {
         return req.reject(
@@ -446,10 +474,10 @@ module.exports = function () {
         );
       }
 
-      // Prevent adding or modifying items on locked purchase orders.
+      // Only Draft and Rejected POs can be modified.
       await ensurePurchaseOrderEditable(purchaseOrderID, req);
 
-      // Revalidate the parent references.
+      // Validate parent authorizations.
       await validateSupplier(
         purchaseOrder.supplier_ID,
         purchaseOrder.companyCode_ID,
@@ -462,7 +490,7 @@ module.exports = function () {
         req
       );
 
-      // Apply reusable validation and pricing logic.
+      // Validate item and calculate its price and line total.
       await preparePurchaseOrderItem(
         data,
         purchaseOrder,
@@ -472,54 +500,59 @@ module.exports = function () {
     }
   );
 
-
   // BUSINESS RULE 8:
   // Recalculate purchase order totals after item changes.
   this.after(
-    ['CREATE', 'UPDATE'],
-    'PurchaseOrderItems',
-    async (result, req) => {
-      const itemID = result?.ID || getRecordID(req);
+  ['CREATE', 'UPDATE'],
+  'PurchaseOrderItems',
+  async (result, req) => {
+    const itemID = result?.ID || getRecordID(req);
 
-      let currentPurchaseOrderID =
-        result?.purchaseOrder_ID ||
-        req.data.purchaseOrder_ID;
+    let currentPurchaseOrderID =
+      result?.purchaseOrder_ID ||
+      req.data.purchaseOrder_ID;
 
-      // If the parent wasn't in the request, look it up.
-      if (!currentPurchaseOrderID && itemID) {
-        const item = await SELECT.one
-          .from(PurchaseOrderItems)
-          .columns('purchaseOrder_ID')
-          .where({ ID: itemID });
+    if (!currentPurchaseOrderID && itemID) {
+      const item = await SELECT.one
+        .from(PurchaseOrderItems)
+        .columns('purchaseOrder_ID')
+        .where({ ID: itemID });
 
-        currentPurchaseOrderID = item?.purchaseOrder_ID;
-      }
+      currentPurchaseOrderID = item?.purchaseOrder_ID;
+    }
 
-      // Recalculate the current and, if applicable, old parent.
-      const purchaseOrderIDs = [
-        currentPurchaseOrderID,
-        req._previousPurchaseOrderID
-      ].filter(
-        (id, index, ids) => id && ids.indexOf(id) === index
+    const purchaseOrderIDs = [
+      currentPurchaseOrderID,
+      req._previousPurchaseOrderID
+    ].filter(
+      (id, index, ids) => id && ids.indexOf(id) === index
+    );
+
+    for (const purchaseOrderID of purchaseOrderIDs) {
+
+      // Lock the parent purchase order.
+      await SELECT.one
+        .from(PurchaseOrders)
+        .columns('ID')
+        .where({ ID: purchaseOrderID })
+        .forUpdate();
+
+      // Read items after acquiring the lock.
+      const items = await SELECT.from(PurchaseOrderItems)
+        .columns('lineTotal')
+        .where({ purchaseOrder_ID: purchaseOrderID });
+
+      const total = items.reduce(
+        (sum, item) => sum + Number(item.lineTotal || 0),
+        0
       );
 
-      for (const purchaseOrderID of purchaseOrderIDs) {
-        const items = await SELECT.from(PurchaseOrderItems)
-          .columns('lineTotal')
-          .where({ purchaseOrder_ID: purchaseOrderID });
-
-        const total = items.reduce(
-          (sum, item) => sum + Number(item.lineTotal || 0),
-          0
-        );
-
-        await UPDATE(PurchaseOrders)
-          .set({ totalAmount: Number(total.toFixed(2)) })
-          .where({ ID: purchaseOrderID });
-      }
+      await UPDATE(PurchaseOrders)
+        .set({ totalAmount: Number(total.toFixed(2)) })
+        .where({ ID: purchaseOrderID });
     }
-  );
-
+  }
+);
 
   // Capture the parent purchase order before the item is deleted.
   this.before(
@@ -583,7 +616,6 @@ module.exports = function () {
     }
   );
 
-
   // APPROVAL WORKFLOW:
   // Submit a purchase order for approval.
   this.on(
@@ -600,15 +632,11 @@ module.exports = function () {
         );
       }
 
-      // // 2. Retrieve the purchase order.
-      // const purchaseOrder = await SELECT.one
-      //   .from(PurchaseOrders)
-      //   .where({ ID: poID });
-
+      // 2. Retrieve and lock the purchase order to prevent concurrent submissions.
       const purchaseOrder = await SELECT.one
-      .from(PurchaseOrders)
-      .where({ ID: poID })
-      .forUpdate();
+        .from(PurchaseOrders)
+        .where({ ID: poID })
+        .forUpdate();
 
       if (!purchaseOrder) {
         return req.reject(
@@ -629,23 +657,51 @@ module.exports = function () {
         );
       }
 
-      // 4. A PO must contain at least one item.
-      const firstItem = await SELECT.one
+      // 4. Retrieve all purchase order items.
+      const items = await SELECT
         .from(PurchaseOrderItems)
-        .columns('ID')
+        .columns('quantity', 'unitPrice', 'lineTotal')
         .where({ purchaseOrder_ID: poID });
 
-      if (!firstItem) {
+      // A PO must contain at least one item.
+      if (items.length === 0) {
         return req.reject(
           400,
           'A purchase order must contain at least one item'
         );
       }
 
-      // 5. Validate the server-calculated PO total.
+      // Calculate the total from actual item values.
+      const calculatedTotal = items.reduce(
+        (total, item) => {
+          const quantity = Number(item.quantity);
+          const unitPrice = Number(item.unitPrice);
+
+          if (
+            !Number.isFinite(quantity) ||
+            !Number.isFinite(unitPrice) ||
+            quantity <= 0 ||
+            unitPrice < 0
+          ) {
+            return req.reject(
+              400,
+              'Purchase order contains invalid item values'
+            );
+          }
+
+          return total + quantity * unitPrice;
+        },
+        0
+      );
+
+      // 5. Validate the PO header total against item totals.
       const totalAmount = Number(
         purchaseOrder.totalAmount || 0
       );
+
+      // Compare amounts using two decimal places.
+      const headerTotalInPaise = Math.round(totalAmount * 100);
+      const calculatedTotalInPaise = Math.round(calculatedTotal * 100);
 
       if (
         !Number.isFinite(totalAmount) ||
@@ -654,6 +710,13 @@ module.exports = function () {
         return req.reject(
           400,
           'Purchase order total must be greater than zero'
+        );
+      }
+
+      if (headerTotalInPaise !== calculatedTotalInPaise) {
+        return req.reject(
+          400,
+          `Purchase order total mismatch. Header total: ${totalAmount.toFixed(2)}, Calculated item total: ${(calculatedTotalInPaise / 100).toFixed(2)}. Please verify the purchase order items before submission.`
         );
       }
 
@@ -709,8 +772,7 @@ module.exports = function () {
     }
   );
 
-
-  // APPROVAL WORKFLOW:
+    // APPROVAL WORKFLOW:
   // Approve the next pending approval level.
   this.on(
     'approvePurchaseOrder',
@@ -723,10 +785,11 @@ module.exports = function () {
         return req.reject(400, 'Unable to identify purchase order');
       }
 
-      // 1. Retrieve the purchase order.
+      // 1. Retrieve and lock the purchase order.
       const purchaseOrder = await SELECT.one
         .from(PurchaseOrders)
-        .where({ ID: poID }).forUpdate();
+        .where({ ID: poID })
+        .forUpdate();
 
       if (!purchaseOrder) {
         return req.reject(404, 'Purchase order not found');
@@ -824,7 +887,6 @@ module.exports = function () {
     }
   );
 
-
   // APPROVAL WORKFLOW:
   // Reject the next pending approval level.
   this.on(
@@ -845,9 +907,11 @@ module.exports = function () {
         );
       }
 
+      // Retrieve and lock the purchase order.
       const purchaseOrder = await SELECT.one
         .from(PurchaseOrders)
-        .where({ ID: poID }).forUpdate();
+        .where({ ID: poID })
+        .forUpdate();
 
       if (!purchaseOrder) {
         return req.reject(404, 'Purchase order not found');
@@ -913,12 +977,12 @@ module.exports = function () {
         })
         .where({ ID: nextApproval.ID });
 
-        // Cancel all remaining pending approvals in this cycle.
+      // Cancel all remaining pending approvals in this cycle.
       await UPDATE(ApprovalRequests)
-        .set({ 
+        .set({
           decision: 'Cancelled',
           decidedAt: new Date()
-         })
+        })
         .where({
           purchaseOrder_ID: poID,
           approvalCycle: currentCycle,
@@ -933,7 +997,4 @@ module.exports = function () {
       return `${nextApproval.approverRole} rejected the purchase order.`;
     }
   );
-
-
-
 };
